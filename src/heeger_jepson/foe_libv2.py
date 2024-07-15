@@ -5,9 +5,13 @@ from jax import lax
 import numpy as np
 from .motionfield import *
 from functools import partial
+from typing import Tuple
+from jaxtyping import Array, Float, PyTree, Integer
 
 
-def generate_random_points_on_positive_hemisphere(num_points):
+def generate_random_points_on_positive_hemisphere(
+    num_points: int,
+) -> Float[np.ndarray, "n 3"]:
     """Generate num_points random points on the positive hemisphere in R^3
     See: https://dornsife.usc.edu/sergey-lototsky/wp-content/uploads/sites/211/2023/06/UniformOnTheSphere.pdf
     Parameters
@@ -33,7 +37,12 @@ def generate_random_points_on_positive_hemisphere(num_points):
 
 
 @partial(jax.jit, static_argnames=["num_samples"])
-def sample_points(mask_in, flow, num_samples, k_size=21):
+def sample_points(
+    mask_in: Float[Array, "H W"],
+    flow: Float[Array, "H W 2"],
+    num_samples: int,
+    k_size: int = 21,
+) -> Tuple[Integer[Array, "3 num_samples"], Float[Array, "num_samples 2"]]:
     """
     Samples Flow Points based of valid mask
     Samples without replacement based on the density of point in an area
@@ -83,19 +92,19 @@ def sample_points(mask_in, flow, num_samples, k_size=21):
 
 @jax.jit
 def heeger_jepson_RT(
-    V,
-    cam_pts,
-    f,
-    res,
-    T_search,
-):
+    V: Float[Array, "num_samples 2"],
+    cam_pts: Integer[Array, "3 num_samples"],
+    f: float,
+    res: Tuple[int, int],
+    T_search: Float[Array, "3 num_cand_points"],
+) -> Tuple[Float[Array, "3"], Float[Array, "3"], Float[Array, "num_cand_points"]]:
     """Heeger Jepson Algorithm
     https://www.cs.toronto.edu/~jepson/papers/HeegerJepsonJCV1992.pdf
     Parameters
     ------------
-    V : ndarray (C,2),
+    V : ndarray (num_samples,2),
         Flow Field
-    cam_pts : ndarray (3, C)
+    cam_pts : ndarray (3, num_samples)
         Camera Points
     f : float
         Focal Length
@@ -123,9 +132,9 @@ def heeger_jepson_RT(
     )
     K_inv = jnp.linalg.inv(K)
 
-    norm_cords = K_inv @ cam_pts  # Normalized Camera Points (3,C)
+    norm_cords = K_inv @ cam_pts  # Normalized Camera Points (3,num_samples)
 
-    V_norm = V * (1 / f)  # Normalized Optical Flow (C,2)
+    V_norm = V * (1 / f)  # Normalized Optical Flow (num_samples,2)
 
     # Create B Matrix for Norm Camera Points, note f=1 with norm cords
     # vmap over all camera points 1 dimension to create a different B matrix for each
@@ -201,19 +210,19 @@ def heeger_jepson_RT(
 
 @jax.jit
 def get_inv_depth(
-    V,
-    cam_pts,
-    f,
-    res,
-    Omega_min,
-    T_min,
-):
+    V: Float[Array, "num_samples 2"],
+    cam_pts: Integer[Array, "3 num_samples"],
+    f: float,
+    res: Tuple[int, int],
+    Omega_min: Float[Array, "3"],
+    T_min: Float[Array, "3"],
+) -> Float[Array, "num_samples 2"]:
     """Calculate Inverse Depth
     Parameters
     ------------
-    V : ndarray (C,2),
+    V : ndarray (num_samples,2),
         Flow Field
-    cam_pts : ndarray (3, C)
+    cam_pts : ndarray (3, num_samples)
         Camera Points
     f : float
         Focal Length
@@ -225,7 +234,7 @@ def get_inv_depth(
         Minimum Translation out T_search
     Returns
     --------
-    inv_depth : ndarray (C)
+    inv_depth : ndarray (num_samples)
         Inverse Depth
     """
 
@@ -272,7 +281,7 @@ def get_inv_depth(
 
 
 @jax.jit
-def calc_inverse(A_p_T_B):
+def calc_inverse(A_p_T_B: Float[Array, "num_samples 3"]) -> Float[Array, "3 3"]:
     """Calculate the inverse of A_p_T_B
     Parameters
     ------------
@@ -287,7 +296,7 @@ def calc_inverse(A_p_T_B):
 
 
 @jax.jit
-def create_A_perp_matrix(cord, f):
+def create_A_perp_matrix(cord: Float[Array, "3"], f: float) -> Float[Array, "2 3"]:
     """Create A_perp Matrix
     [[0, -f, y],
     [f, 0, -x]]
@@ -307,7 +316,7 @@ def create_A_perp_matrix(cord, f):
 
 
 @jax.jit
-def create_A_matrix(cord, f):
+def create_A_matrix(cord: Float[Array, "3"], f: float) -> Float[Array, "2 3"]:
     """Create the A matrix for each camera point
     [[-f, 0, x],
     [0, -f, y]]
@@ -330,7 +339,7 @@ def create_A_matrix(cord, f):
 
 
 @jax.jit
-def create_B_matrix(cord, f):
+def create_B_matrix(cord: Float[Array, "3"], f: float) -> Float[Array, "2 3"]:
     """Create the B matrix for each camera point
     [[xy/f, -(f+x^2/f), y],
     [f+y^2/f, -(xy)/f, -x]]
