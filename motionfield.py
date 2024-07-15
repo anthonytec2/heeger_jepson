@@ -7,6 +7,7 @@ import jax
 class MotionField:
     def __init__(self, f, res, T, Ω, Z):
         """Generate an arbitrary Motion Field
+        See: Trucco, E., & Verri, A. (1998). Introductory techniques for 3-D computer vision. Chapter 8: Motion
         Paramerters
         ------------
         f : float
@@ -73,6 +74,8 @@ class MotionField:
 
     def create_A_matrix(self, cord, f):
         """Create the A matrix for each camera point
+        [[-f, 0, x],
+        [0, -f, y]]
         Parameters
         ------------
         cord : ndarray (3)
@@ -92,6 +95,8 @@ class MotionField:
 
     def create_B_matrix(self, cord, f):
         """Create the B matrix for each camera point
+        [[xy/f, -(f+x^2/f), y],
+        [f+y^2/f, -(xy)/f, -x]]
         Parameters
         ------------
         cord : ndarray (3)
@@ -104,7 +109,7 @@ class MotionField:
         """
         return jnp.array(
             [
-                [(cord[0] * cord[1]), -(f + (cord[0] ** 2) / f), cord[1]],
+                [(cord[0] * cord[1]) / f, -(f + (cord[0] ** 2) / f), cord[1]],
                 [f + (cord[1] ** 2) / f, -(cord[0] * cord[1]) / f, -cord[0]],
             ]
         )

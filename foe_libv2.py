@@ -1,5 +1,4 @@
 # See egomotion.ipynb for exploratory introduction to this code
-
 import jax
 import jax.numpy as jnp
 from jax import lax
@@ -10,6 +9,7 @@ from functools import partial
 
 def generate_random_points_on_positive_hemisphere(num_points):
     """Generate num_points random points on the positive hemisphere in R^3
+    See: https://dornsife.usc.edu/sergey-lototsky/wp-content/uploads/sites/211/2023/06/UniformOnTheSphere.pdf
     Parameters
     ------------
     num_points : int
@@ -81,158 +81,275 @@ def sample_points(mask_in, flow, num_samples, k_size=21):
     return pts, flow[y_sel, x_sel]
 
 
-class HeegerJepson:
-    def __init__(self, V, cam_pts, f, T_search, res):
-        """Heeger Jepson Algorithm
-        Parameters
-        ------------
-        V : ndarray (C,2),
-            Flow Field
-        cam_pts : ndarray (3, C)
-            Camera Points
-        f : float
-            Focal Length
-        T_search : ndarray (3, num_cand_points)
-            Candidate Translation Directions
-        res : tuple
-            Resolution of the image
-        """
-        K = jnp.array(
-            [
-                [f, 0, res[0] / 2],
-                [0, f, res[1] / 2],
-                [0, 0, 1],
-            ]
-        )
-        K_inv = jnp.linalg.inv(K)
-        norm_cords = K_inv @ cam_pts
+@jax.jit
+def heeger_jepson_RT(
+    V,
+    cam_pts,
+    f,
+    res,
+    T_search,
+):
+    """Heeger Jepson Algorithm
+    https://www.cs.toronto.edu/~jepson/papers/HeegerJepsonJCV1992.pdf
+    Parameters
+    ------------
+    V : ndarray (C,2),
+        Flow Field
+    cam_pts : ndarray (3, C)
+        Camera Points
+    f : float
+        Focal Length
+    T_search : ndarray (3, num_cand_points)
+        Candidate Translation Directions
+    res : tuple
+        Resolution of the image
+    Returns
+    --------
+    T_min : ndarray (3)
+        Minimum Translation out T_search
+    Omega_min : ndarray (3)
+        Minimum Rotation based on T_search
+    tot_res : ndarray (num_cand_points)
+        Total Residuals for each flow vector
+    """
 
-        flow_norm = V * (1 / f)
+    # Normalize Camera Points + Flow
+    K = jnp.array(
+        [
+            [f, 0, res[0] / 2],
+            [0, f, res[1] / 2],
+            [0, 0, 1],
+        ]
+    )
+    K_inv = jnp.linalg.inv(K)
 
-        # Create a function to create a different A matrix for each camera point
-        # (Mapping over each camera point, and passing f=1)
-        create_A = jax.vmap(self.create_A_matrix, in_axes=(1, None), out_axes=0)
-        A = create_A(norm_cords, 1)  # A: (res[0] * res[1], 2, 3)
+    norm_cords = K_inv @ cam_pts  # Normalized Camera Points (3,C)
 
-        # Create a function to create a different B matrix for each camera point
-        # (Mapping over each camera point, and passing f=1)
-        create_B = jax.vmap(self.create_B_matrix, in_axes=(1, None), out_axes=0)
-        B = create_B(norm_cords, 1)  # (res[0] * res[1], 2, 3)
+    V_norm = V * (1 / f)  # Normalized Optical Flow (C,2)
 
-        # Creat A_perp Matrix, map over norm camera points,
-        create_A_perp = jax.vmap(
-            self.create_A_perp_matrix, in_axes=(1, None), out_axes=0
-        )
-        A_perp = create_A_perp(norm_cords, 1)  # (Pts, 2, 3)
-        A_perp_T = A_perp @ T_search
-        tmp_rearange = A_perp_T.transpose(
-            1, 0, 2
-        )  # A_perp_T(Rearanged) (2, # pts, # Dirs)
-        A_perp_T_norm = tmp_rearange / (
-            jnp.linalg.norm(tmp_rearange, axis=0)[None, :, :] + 1e-10
-        )
+    # Create B Matrix for Norm Camera Points, note f=1 with norm cords
+    # vmap over all camera points 1 dimension to create a different B matrix for each
+    create_B = jax.vmap(create_B_matrix, in_axes=(1, None), out_axes=0)
+    B = create_B(norm_cords, 1)  # (res[0] * res[1], 2, 3)
 
-        V = flow_norm
+    # Going to calculate terms for:
+    # min_T || A_perp(T)B Omega_LSQ -A_perp(T)V)||_2^2
 
-        A_perp_T_V = jnp.sum(
-            A_perp_T_norm.transpose(1, 0, 2) * V[:, :, None], axis=1
-        )  # (#pts,2,#Dirs) x (#pts,2,1)= \sum_a1 (#pts,2,#Dirs)= (#pts,#Dirs)
+    # Creat A_perp Matrix, map over norm camera points, note f=1 with norm cords
+    # vamp over 1st dimension, whihc is all camera points
+    create_A_perp = jax.vmap(create_A_perp_matrix, in_axes=(1, None), out_axes=0)
+    A_perp = create_A_perp(norm_cords, 1)  # (Pts, 2, 3)
 
-        A_perp_T_B = jnp.sum(
-            A_perp_T_norm.transpose(1, 0, 2)[:, :, None, :] * B[:, :, :, None], axis=1
-        )  # (#pts,2,1,#Dirs) x (#pts,2,3, 1)= \sum_a1 (#pts,2,3,#Dirs)= (#pts,3, #Dirs)
+    # Calculate A_perp(T)=(JAT/|JAT|)
+    A_perp_T = (
+        A_perp @ T_search
+    )  #  A_perp (# pts, 2, 3), T: (3, # Dirs), Out: (# pts, 2, # Dirs)
+    tmp_rearange = A_perp_T.transpose(1, 0, 2)  # A_perp_T(Rearanged) (2, # pts, # Dirs)
+    A_perp_T_norm = tmp_rearange / (
+        jnp.linalg.norm(tmp_rearange, axis=0)[None, :, :] + 1e-10
+    )  # A_perp_T_norm (2, # pts, Dirs)
 
-        inv_func = jax.vmap(self.calc_inverse, in_axes=(2))
-        A_perp_T_B_inv = inv_func(A_perp_T_B)  # (#pts,3, #Dirs) -> (#Dirs,3,3)
-        A_perp_T_B_A_perp_T_V = jax.lax.batch_matmul(
-            A_perp_T_B.transpose(2, 1, 0), A_perp_T_V.T[:, :, None]
-        )[:, :, 0].T
+    # Calculate ther term A_perp(T)V, we do with broadcasted multipication + sum
+    A_perp_T_V = jnp.sum(
+        A_perp_T_norm.transpose(1, 0, 2) * V_norm[:, :, None], axis=1
+    )  # (#pts,2,#Dirs) x (#pts,2,1)= \sum_a1 (#pts,2,#Dirs)= (#pts,#Dirs)
 
-        Omega = jax.lax.batch_matmul(
-            A_perp_T_B_inv, A_perp_T_B_A_perp_T_V.T[:, :, None]
-        )[:, :, 0]
-        A_perp_B_omega = jnp.sum(A_perp_T_B * Omega[:, :, None].T, axis=1)
-        flow_res = (A_perp_B_omega - A_perp_T_V) ** 2  # calculate norm error
-        tot_res = jnp.sum(flow_res, axis=0)  # sum up over all points
-        min_idx = jnp.argmin(tot_res)
-        self.T_min = T_search[:, min_idx]
-        self.Omega_min = Omega[min_idx]
+    # Calculate ther term A_perp(T)B, we do with broadcasted multipication + sum
+    A_perp_T_B = jnp.sum(
+        A_perp_T_norm.transpose(1, 0, 2)[:, :, None, :] * B[:, :, :, None], axis=1
+    )  # (#pts,2,1,#Dirs) x (#pts,2,3, 1)= \sum_a1 (#pts,2,3,#Dirs)= (#pts,3, #Dirs)
 
-        rot_corr_flow = V - (B @ self.Omega_min)
-        AT_min = A @ self.T_min
-        lhs_term = jnp.sum(rot_corr_flow * AT_min, axis=1)
-        rhs_term = jnp.sum(AT_min**2, axis=1)
-        self.inv_depth = lhs_term / (rhs_term + 1e-7)
+    # Solve LSQ Problem: A_perp(T)B Omega_LSQ = A_perp(T)V, solve for Omega_LSQ
+    # Going to calculat the psudeoinverse, by first mutiplicting both sides (A_perp(T)B )^T
+    # First going to compute the inverse of the LHS: ((A_perp(T)B)^T A_perp(T)B)^-1
+    # vmap over each of the searched directions 2nd dimension
+    inv_func = jax.vmap(calc_inverse, in_axes=(2))
+    A_perp_T_B_inv = inv_func(A_perp_T_B)  # (#pts,3, #Dirs) -> (#Dirs,3,3)
 
-    def calc(
-        self,
-    ):
-        return self.T_min, self.Omega_min, self.inv_depth
+    # Additionally, mutiply RHS by (A_perp(T)B)^T
+    # A_perp_T_B:(#pts,3,#Dirs),
+    # A_perp_T_V:(#pts,#Dirs),
+    # A_perp_T_B_A_perp_T_V: (3, #Dirs)
+    A_perp_T_B_A_perp_T_V = jax.lax.batch_matmul(
+        A_perp_T_B.transpose(2, 1, 0), A_perp_T_V.T[:, :, None]
+    )[:, :, 0].T
 
-    def create_A_perp_matrix(self, cord, f):
-        """Create A_perp Matrix
-        Parameters
-        ------------
-        cord : ndarray (3)
-            Camera Point
-        f : float
-            Focal Length
-        Returns
-        --------
-        A_perp : ndarray (2,3)
-        """
-        return jnp.array([[0, -f, cord[1]], [f, 0, -cord[0]]])
+    # Calculate Omega_LSQ:  Omega_LSQ = ((A_perp(T)B)^T A_perp(T)B)^-1 (A_perp(T)B)^T A_perp(T)V
+    # A_perp_T_B_inv: (#Dirs,3,3),
+    # A_perp_T_B_A_perp_T_V: (3, #Dirs)
+    # Omega: (#Dirs,3)
+    Omega = jax.lax.batch_matmul(A_perp_T_B_inv, A_perp_T_B_A_perp_T_V.T[:, :, None])[
+        :, :, 0
+    ]
 
-    def calc_inverse(self, A_p_T_B):
-        """Calculate the inverse of A_p_T_B
-        Parameters
-        ------------
-        A_p_T_B : ndarray (3, #Dirs)
-            A_perp_T_B
-        Returns
-        --------
-        inv : ndarray (3,3)
-            Inverse of A_p_T_B
-        """
-        return jnp.linalg.inv(A_p_T_B.T @ A_p_T_B)
+    # Calculate the first term: || A_perp(T)B Omega_LSQ -A_perp(T)V)||_2^2
+    # A_perp_T_B_inv: (#Dirs,3,3),
+    # A_perp_T_B_A_perp_T_V: (3, #Dirs)
+    # Omega: (#Dirs,3)
+    A_perp_B_omega = jnp.sum(A_perp_T_B * Omega[:, :, None].T, axis=1)
 
-    def create_A_matrix(self, cord, f):
-        """Create the A matrix for each camera point
-        Parameters
-        ------------
-        cord : ndarray (3)
-            Camera Point
-        f : float
-            Focal Length
-        Returns
-        --------
-        A : ndarray (2,3)
-        """
-        return jnp.array(
-            [
-                [-f, 0, cord[0]],
-                [0, -f, cord[1]],
-            ]
-        )
+    # Calculate the full residual given computations above
+    flow_res = (A_perp_B_omega - A_perp_T_V) ** 2
+    tot_res_per_direction = jnp.sum(flow_res, axis=0)  # Sum all this over all points
 
-    def create_B_matrix(self, cord, f):
-        """Create the B matrix for each camera point
-        Parameters
-        ------------
-        cord : ndarray (3)
-            Camera Point
-        f : float
-            Focal Length
-        Returns
-        --------
-        B : ndarray (2,3)
-        """
-        return jnp.array(
-            [
-                [(cord[0] * cord[1]), -(f + (cord[0] ** 2) / f), cord[1]],
-                [f + (cord[1] ** 2) / f, -(cord[0] * cord[1]) / f, -cord[0]],
-            ]
-        )
+    # Find the minimum residual, and output min vals
+    min_idx = jnp.argmin(tot_res_per_direction)
+    T_min = T_search[:, min_idx]
+    Omega_min = Omega[min_idx]
+    return T_min, Omega_min, tot_res_per_direction
+
+
+@jax.jit
+def get_inv_depth(
+    V,
+    cam_pts,
+    f,
+    res,
+    Omega_min,
+    T_min,
+):
+    """Calculate Inverse Depth
+    Parameters
+    ------------
+    V : ndarray (C,2),
+        Flow Field
+    cam_pts : ndarray (3, C)
+        Camera Points
+    f : float
+        Focal Length
+    Omega_min : ndarray (3)
+        Minimum Rotation based on T_search
+    res : tuple
+        Resolution of the image
+    T_min : ndarray (3)
+        Minimum Translation out T_search
+    Returns
+    --------
+    inv_depth : ndarray (C)
+        Inverse Depth
+    """
+
+    # In this function, recompute many of the values as we may pass in new points not in original function
+    K = jnp.array(
+        [
+            [f, 0, res[0] / 2],
+            [0, f, res[1] / 2],
+            [0, 0, 1],
+        ]
+    )
+    K_inv = jnp.linalg.inv(K)
+
+    norm_cords = K_inv @ cam_pts  # Normalized Camera Points (3,C)
+
+    V_norm = V * (1 / f)  # Normalized Optical Flow (C,2)
+
+    # Create A Matrix for Norm Camera Points, note f=1 with norm cords
+    # vmap over all camera points 1 dimension to create a different A matrix for each
+    create_A = jax.vmap(create_A_matrix, in_axes=(1, None), out_axes=0)
+    A = create_A(norm_cords, 1)  # A: (res[0] * res[1], 2, 3)
+
+    # Create B Matrix for Norm Camera Points, note f=1 with norm cords
+    # vmap over all camera points 1 dimension to create a different B matrix for each
+    create_B = jax.vmap(create_B_matrix, in_axes=(1, None), out_axes=0)
+    B = create_B(norm_cords, 1)  # (res[0] * res[1], 2, 3)
+
+    # ||(1/z)AT+BOmega||_2^2 -> v-BOmega= (1/z)A(T)
+    # Solve: A^T(T)(v-BOmega) =A^T(T)A(T) (1/z)
+    # Solve: (A^T(T)(v-BOmega))/(A^T(T)A(T)) = (1/z)
+
+    # rot_corr_flow: (C,2)
+    # B: (C,2,3)
+    # Omega_min: (3)
+    rot_corr_flow = V - (B @ Omega_min)
+
+    # A: (C,2,3)
+    # T_min: (3)
+    AT_min = A @ T_min
+    lhs_term = jnp.sum(rot_corr_flow * AT_min, axis=1)  # (C)
+    rhs_term = jnp.sum(AT_min**2, axis=1)  # (C)
+    inv_depth = lhs_term / (rhs_term + 1e-7)
+    return inv_depth
+
+
+@jax.jit
+def calc_inverse(A_p_T_B):
+    """Calculate the inverse of A_p_T_B
+    Parameters
+    ------------
+    A_p_T_B : ndarray (#pts, 3)
+        A_perp_T_B
+    Returns
+    --------
+    inv : ndarray (3,3)
+        Inverse of A_p_T_B
+    """
+    return jnp.linalg.inv(A_p_T_B.T @ A_p_T_B)
+
+
+@jax.jit
+def create_A_perp_matrix(cord, f):
+    """Create A_perp Matrix
+    [[0, -f, y],
+    [f, 0, -x]]
+    A_perp=[[0,1],[-1,0]]A
+
+    Parameters
+    ------------
+    cord : ndarray (3)
+        Camera Point
+    f : float
+        Focal Length
+    Returns
+    --------
+    A_perp : ndarray (2,3)
+    """
+    return jnp.array([[0, -f, cord[1]], [f, 0, -cord[0]]])
+
+
+@jax.jit
+def create_A_matrix(cord, f):
+    """Create the A matrix for each camera point
+    [[-f, 0, x],
+    [0, -f, y]]
+    Parameters
+    ------------
+    cord : ndarray (3)
+        Camera Point
+    f : float
+        Focal Length
+    Returns
+    --------
+    A : ndarray (2,3)
+    """
+    return jnp.array(
+        [
+            [-f, 0, cord[0]],
+            [0, -f, cord[1]],
+        ]
+    )
+
+
+@jax.jit
+def create_B_matrix(cord, f):
+    """Create the B matrix for each camera point
+    [[xy/f, -(f+x^2/f), y],
+    [f+y^2/f, -(xy)/f, -x]]
+    Parameters
+    ------------
+    cord : ndarray (3)
+        Camera Point
+    f : float
+        Focal Length
+    Returns
+    --------
+    B : ndarray (2,3)
+    """
+    return jnp.array(
+        [
+            [(cord[0] * cord[1]) / f, -(f + (cord[0] ** 2) / f), cord[1]],
+            [f + (cord[1] ** 2) / f, -(cord[0] * cord[1]) / f, -cord[0]],
+        ]
+    )
 
 
 if __name__ == "__main__":
@@ -254,9 +371,32 @@ if __name__ == "__main__":
 
     # Function to sample the flow field and return cam_pts
     # Computationally expensive to use entire flow field, so we sample
-    flow_eval_pts, flow_eval = sample_points(jnp.ones(res), flow, 45 * 45)
+    flow_eval_pts, flow_eval = sample_points(jnp.ones(res), flow, 100 * 100)
     # Feel free to define your own policy(Grid Sampling, Random,etc), but this is a good starting point
 
-    T_min, Omega_min, inv_depth = HeegerJepson(
-        flow_eval, flow_eval_pts, f, T_search, res
-    ).calc()
+    T_min, Omega_min, tot_res = heeger_jepson_RT(
+        flow_eval,
+        flow_eval_pts,
+        f,
+        res,
+        T_search,
+    )
+
+    inv_depth = get_inv_depth(
+        flow_eval,
+        flow_eval_pts,
+        f,
+        res,
+        Omega_min,
+        T_min,
+    )
+    print("T_min, T_GT")
+    print(T_min, T / jnp.linalg.norm(T))
+    print("Ω_min, Ω_GT")
+    print(Omega_min, Ω)
+
+    # Reminder, these will be off my a scale constant
+    # Also, given how well you can solve for Omega and T
+    Z_samp = Z.reshape(res)[flow_eval_pts[1], flow_eval_pts[0]]
+    print("Z_min, Z_GT")
+    print(1 / inv_depth[0], Z_samp[0])
