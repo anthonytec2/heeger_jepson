@@ -3,7 +3,7 @@ import jax
 import jax.numpy as jnp
 from jax import lax
 import numpy as np
-from motionfield import *
+from .motionfield import *
 from functools import partial
 
 
@@ -352,7 +352,7 @@ def create_B_matrix(cord, f):
     )
 
 
-if __name__ == "__main__":
+def main():
     T = jnp.array([0, 0, 2])
     Ω = jnp.array([0, 0, 0])
     res = (100, 100)
@@ -400,3 +400,7 @@ if __name__ == "__main__":
     Z_samp = Z.reshape(res)[flow_eval_pts[1], flow_eval_pts[0]]
     print("Z_min, Z_GT")
     print(1 / inv_depth[0], Z_samp[0])
+
+
+if __name__ == "__main__":
+    main()

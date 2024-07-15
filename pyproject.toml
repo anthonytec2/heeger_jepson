@@ -1,0 +1,65 @@
+
+[build-system]
+requires = ["setuptools"]  # REQUIRED if [build-system] table is used
+build-backend = "setuptools.build_meta"  # If not defined, then legacy behavior can happen.
+
+
+[project]
+name = "heegerjepson"  # REQUIRED, is the only field that cannot be marked as dynamic.
+version = "1.0.0"  # REQUIRED, although can be dynamic
+description = "Heeger and Jepson Method for Egomotion Estimation from Optical Flow"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {file = "LICENSE.txt"}
+keywords = ["computervision", "opticalflow", "egomotion"]
+authors = [
+  {name = "Anthony Bisulco", email = "abisulco@seas.upenn.edu" }
+]
+maintainers = [
+  {name = "Anthony Bisulco", email = "abisulco@seas.upenn.edu" }
+]
+
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Researchers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3 :: Only",
+]
+
+
+dependencies = [
+  "jax>=0.4.30",
+  "jaxlib>=0.4.30",
+  "numpy>=2.0.0",
+  "matplotlib>=3.9.1",
+  "scipy>=1.13.1",
+]
+
+# List additional groups of dependencies here (e.g. development
+# dependencies). Users will be able to install these using the "extras"
+# syntax, for example:
+#
+#   $ pip install sampleproject[dev]
+#
+# Optional dependencies the project provides. These are commonly 
+# referred to as "extras". For a more extensive definition see:
+# https://packaging.python.org/en/latest/specifications/dependency-specifiers/#extras
+[project.optional-dependencies]
+dev = ["check-manifest"]
+test = ["coverage"]
+
+
+[project.urls]
+"Homepage" = "https://github.com/anthonytec2/heeger_jepson"
+"Bug Reports" = "https://github.com/anthonytec2/heeger_jepson/issues"
+"Source" = "https://www.cs.toronto.edu/~jepson/papers/HeegerJepsonJCV1992.pdf"
+
+
+[tool.setuptools]
+package-data = {}
