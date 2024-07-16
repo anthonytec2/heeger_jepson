@@ -103,7 +103,7 @@ def heeger_jepson_RT(
     Parameters
     ------------
     V : ndarray (num_samples,2),
-        Flow Field
+        Flow Field, normalized coordinates unit, not pixels
     cam_pts : ndarray (3, num_samples)
         Camera Points
     f : float
@@ -134,8 +134,6 @@ def heeger_jepson_RT(
 
     norm_cords = K_inv @ cam_pts  # Normalized Camera Points (3,num_samples)
 
-    V_norm = V * (1 / f)  # Normalized Optical Flow (num_samples,2)
-
     # Create B Matrix for Norm Camera Points, note f=1 with norm cords
     # vmap over all camera points 1 dimension to create a different B matrix for each
     create_B = jax.vmap(create_B_matrix, in_axes=(1, None), out_axes=0)
@@ -160,7 +158,7 @@ def heeger_jepson_RT(
 
     # Calculate ther term A_perp(T)V, we do with broadcasted multipication + sum
     A_perp_T_V = jnp.sum(
-        A_perp_T_norm.transpose(1, 0, 2) * V_norm[:, :, None], axis=1
+        A_perp_T_norm.transpose(1, 0, 2) * V[:, :, None], axis=1
     )  # (#pts,2,#Dirs) x (#pts,2,1)= \sum_a1 (#pts,2,#Dirs)= (#pts,#Dirs)
 
     # Calculate ther term A_perp(T)B, we do with broadcasted multipication + sum
@@ -249,8 +247,6 @@ def get_inv_depth(
     K_inv = jnp.linalg.inv(K)
 
     norm_cords = K_inv @ cam_pts  # Normalized Camera Points (3,C)
-
-    V_norm = V * (1 / f)  # Normalized Optical Flow (C,2)
 
     # Create A Matrix for Norm Camera Points, note f=1 with norm cords
     # vmap over all camera points 1 dimension to create a different A matrix for each
