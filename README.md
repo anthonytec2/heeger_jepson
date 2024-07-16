@@ -1,4 +1,8 @@
 ## Egomotion Recovery
+<a target="_blank" href="https://colab.research.google.com/github/anthonytec2/heeger_jepson/blob/main/egomotion.ipynb">
+  <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
+</a> 
+
 *tldr: How to recover egomotion: translational, rotational motion along with depth up to a scale from optical flow*
 
 This repository is dedicated to the implementation of David Heeger and Alan Jepson's method: "Subspace Methods for Recovering Rigid Motion".
