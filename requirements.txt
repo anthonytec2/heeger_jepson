@@ -3,3 +3,5 @@ jaxlib==0.4.30
 matplotlib==3.9.1
 numpy==2.0.0
 scipy==1.13.1
+typeguard==4.3.0
+jaxtyping==0.2.28
