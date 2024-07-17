@@ -6,12 +6,16 @@ import numpy as np
 from .motionfield import *
 from functools import partial
 from typing import Tuple
-from jaxtyping import Array, Float, PyTree, Integer
+from jaxtyping import Array, Float, PyTree, Integer, jaxtyped, ScalarLike
+from typeguard import typechecked as typechecker
+import matplotlib.pyplot as plt
+from typing import Union
 
 
+@jaxtyped(typechecker=typechecker)
 def generate_random_points_on_positive_hemisphere(
     num_points: int,
-) -> Float[np.ndarray, "n 3"]:
+) -> Float[Array, "3 num_points"]:
     """Generate num_points random points on the positive hemisphere in R^3
     See: https://dornsife.usc.edu/sergey-lototsky/wp-content/uploads/sites/211/2023/06/UniformOnTheSphere.pdf
     Parameters
@@ -20,7 +24,7 @@ def generate_random_points_on_positive_hemisphere(
         Number of points to generate
     Returns
     --------
-    points : ndarray (num_points, 3)
+    points : ndarray (3, num_points)
         Random points on the positive hemisphere
     """
     points = np.zeros((num_points, 3))
@@ -33,15 +37,16 @@ def generate_random_points_on_positive_hemisphere(
         y = np.sin(theta) * np.sin(phi)
         z = np.cos(theta)
         points[i] = [x, y, z]
-    return np.vstack([points[:, 0], points[:, 1], points[:, 2]])
+    return jnp.vstack([points[:, 0], points[:, 1], points[:, 2]])
 
 
 @partial(jax.jit, static_argnames=["num_samples"])
+@jaxtyped(typechecker=typechecker)
 def sample_points(
     mask_in: Float[Array, "H W"],
     flow: Float[Array, "H W 2"],
-    num_samples: int,
-    k_size: int = 21,
+    num_samples: Union[int, Integer[ScalarLike, ""]],
+    k_size: Union[int, Integer[ScalarLike, ""]] = 21,
 ) -> Tuple[Integer[Array, "3 num_samples"], Float[Array, "num_samples 2"]]:
     """
     Samples Flow Points based of valid mask
@@ -90,12 +95,127 @@ def sample_points(
     return pts, flow[y_sel, x_sel]
 
 
+@jaxtyped(typechecker=typechecker)
+def coarse_to_fine(
+    V: Float[Array, "num_samples 2"],
+    cam_pts: Integer[Array, "3 num_samples"],
+    f: Union[float, Float[ScalarLike, ""]],
+    res: Tuple[
+        Union[int, Integer[ScalarLike, ""]], Union[int, Integer[ScalarLike, ""]]
+    ],
+    T_search_coarse: Float[Array, "3 num_cand_points"] = jnp.zeros((3, 0)),
+    pixel_search: Union[int, Integer[ScalarLike, ""]] = 1000,
+    width_search: Union[int, Integer[ScalarLike, ""]] = 50,
+    coarse_num_dirs: Union[int, Integer[ScalarLike, ""]] = 2000,
+) -> Tuple[
+    Tuple[
+        Float[Array, "3 num_cand_points_ret"],
+        Float[Array, "3"],
+        Float[Array, "3"],
+        Float[Array, "num_cand_points_ret"],
+    ],
+    Tuple[
+        Float[Array, "3 num_fine_cand_points"],
+        Float[Array, "3"],
+        Float[Array, "3"],
+        Float[Array, "num_fine_cand_points"],
+    ],
+]:
+    """Coarse to Fine Search
+    Parameters
+    ------------
+    V : ndarray (num_samples,2),
+        Flow Field
+    cam_pts : ndarray (3, num_samples)
+        Camera Points
+    f : float
+        Focal Length
+    res : tuple
+        Resolution of the image
+    T_search_coarse : ndarray (3, num_cand_points)
+        Candidate Translation Directions
+    pixel_search : int
+        Number of pixels to search
+    width_search : int
+        Width of search
+    coarse_num_dirs : int
+        Number of coarse directions to search
+    Returns
+    --------
+    This is repeated for the coarse and find points
+    T_search : ndarray (3 num_cand_points)
+        Translation Vectors that are searched over
+    T_min : ndarray (3)
+        Minimum Translation out T_search
+    Omega_min : ndarray (3)
+        Minimum Rotation based on T_search
+    tot_res : ndarray (num_cand_points)
+        Total Residuals for each flow vector
+    """
+    if T_search_coarse.shape[1] == 0:
+        T_search_coarse = generate_random_points_on_positive_hemisphere(coarse_num_dirs)
+    T_min_coarse, Omega_min_coarse, tot_res_coarse = heeger_jepson_RT(
+        V,
+        cam_pts,
+        f,
+        res,
+        T_search_coarse,
+    )
+
+    K = jnp.array(
+        [
+            [f, 0, res[0] / 2],
+            [0, f, res[1] / 2],
+            [0, 0, 1],
+        ]
+    )
+    min_pix = K @ T_min_coarse
+    min_pix = min_pix / min_pix[2]
+    x_pt = jnp.linspace(
+        min_pix[0].astype(int) - width_search,
+        min_pix[0].astype(int) + width_search,
+        pixel_search,
+    )
+    y_pt = jnp.linspace(
+        min_pix[1].astype(int) - width_search,
+        min_pix[1].astype(int) + width_search,
+        pixel_search,
+    )
+    nx, ny = jnp.meshgrid(x_pt, y_pt)
+    T_dir_un = jnp.linalg.inv(K) @ jnp.vstack(
+        [
+            nx.reshape(-1),
+            ny.reshape(-1),
+            jnp.ones(pixel_search * pixel_search),
+        ]
+    )
+    T_search_fine = T_dir_un
+
+    T_min_fine, Omega_min_fine, tot_res_fine = heeger_jepson_RT(
+        V,
+        cam_pts,
+        f,
+        res,
+        T_search_fine,
+    )
+
+    return (T_search_coarse, T_min_coarse, Omega_min_coarse, tot_res_coarse), (
+        T_search_fine,
+        T_min_fine,
+        Omega_min_fine,
+        tot_res_fine,
+    )
+
+
 @jax.jit
+@jaxtyped(typechecker=typechecker)
 def heeger_jepson_RT(
     V: Float[Array, "num_samples 2"],
     cam_pts: Integer[Array, "3 num_samples"],
-    f: float,
-    res: Tuple[int, int],
+    f: Union[float, Float[ScalarLike, ""]],
+    res: Tuple[
+        Union[int, Integer[ScalarLike, ""]], Union[int, Integer[ScalarLike, ""]]
+    ],
     T_search: Float[Array, "3 num_cand_points"],
 ) -> Tuple[Float[Array, "3"], Float[Array, "3"], Float[Array, "num_cand_points"]]:
     """Heeger Jepson Algorithm
@@ -137,7 +257,7 @@ def heeger_jepson_RT(
     # Create B Matrix for Norm Camera Points, note f=1 with norm cords
     # vmap over all camera points 1 dimension to create a different B matrix for each
     create_B = jax.vmap(create_B_matrix, in_axes=(1, None), out_axes=0)
-    B = create_B(norm_cords, 1)  # (res[0] * res[1], 2, 3)
+    B = create_B(norm_cords, 1.0)  # (res[0] * res[1], 2, 3)
 
     # Going to calculate terms for:
     # min_T || A_perp(T)B Omega_LSQ -A_perp(T)V)||_2^2
@@ -145,7 +265,7 @@ def heeger_jepson_RT(
     # Creat A_perp Matrix, map over norm camera points, note f=1 with norm cords
     # vamp over 1st dimension, whihc is all camera points
     create_A_perp = jax.vmap(create_A_perp_matrix, in_axes=(1, None), out_axes=0)
-    A_perp = create_A_perp(norm_cords, 1)  # (Pts, 2, 3)
+    A_perp = create_A_perp(norm_cords, 1.0)  # (Pts, 2, 3)
 
     # Calculate A_perp(T)=(JAT/|JAT|)
     A_perp_T = (
@@ -207,14 +327,17 @@ def heeger_jepson_RT(
 
 
 @jax.jit
+@jaxtyped(typechecker=typechecker)
 def get_inv_depth(
     V: Float[Array, "num_samples 2"],
     cam_pts: Integer[Array, "3 num_samples"],
-    f: float,
-    res: Tuple[int, int],
+    f: Union[float, Float[ScalarLike, ""]],
+    res: Tuple[
+        Union[int, Integer[ScalarLike, ""]], Union[int, Integer[ScalarLike, ""]]
+    ],
     Omega_min: Float[Array, "3"],
     T_min: Float[Array, "3"],
-) -> Float[Array, "num_samples 2"]:
+) -> Float[Array, "num_samples"]:
     """Calculate Inverse Depth
     Parameters
     ------------
@@ -251,12 +374,12 @@ def get_inv_depth(
     # Create A Matrix for Norm Camera Points, note f=1 with norm cords
     # vmap over all camera points 1 dimension to create a different A matrix for each
     create_A = jax.vmap(create_A_matrix, in_axes=(1, None), out_axes=0)
-    A = create_A(norm_cords, 1)  # A: (res[0] * res[1], 2, 3)
+    A = create_A(norm_cords, 1.0)  # A: (res[0] * res[1], 2, 3)
 
     # Create B Matrix for Norm Camera Points, note f=1 with norm cords
     # vmap over all camera points 1 dimension to create a different B matrix for each
     create_B = jax.vmap(create_B_matrix, in_axes=(1, None), out_axes=0)
-    B = create_B(norm_cords, 1)  # (res[0] * res[1], 2, 3)
+    B = create_B(norm_cords, 1.0)  # (res[0] * res[1], 2, 3)
 
     # ||(1/z)AT+BOmega||_2^2 -> v-BOmega= (1/z)A(T)
     # Solve: A^T(T)(v-BOmega) =A^T(T)A(T) (1/z)
@@ -277,6 +400,7 @@ def get_inv_depth(
 
 
 @jax.jit
+@jaxtyped(typechecker=typechecker)
 def calc_inverse(A_p_T_B: Float[Array, "num_samples 3"]) -> Float[Array, "3 3"]:
     """Calculate the inverse of A_p_T_B
     Parameters
@@ -292,7 +416,11 @@ def calc_inverse(A_p_T_B: Float[Array, "num_samples 3"]) -> Float[Array, "3 3"]:
 
 
 @jax.jit
-def create_A_perp_matrix(cord: Float[Array, "3"], f: float) -> Float[Array, "2 3"]:
+@jaxtyped(typechecker=typechecker)
+def create_A_perp_matrix(
+    cord: Float[Array, "3"],
+    f: Union[float, Float[ScalarLike, ""]],
+) -> Float[Array, "2 3"]:
     """Create A_perp Matrix
     [[0, -f, y],
     [f, 0, -x]]
@@ -312,7 +440,11 @@ def create_A_perp_matrix(cord: Float[Array, "3"], f: float) -> Float[Array, "2 3
 
 
 @jax.jit
-def create_A_matrix(cord: Float[Array, "3"], f: float) -> Float[Array, "2 3"]:
+@jaxtyped(typechecker=typechecker)
+def create_A_matrix(
+    cord: Float[Array, "3"],
+    f: Union[float, Float[ScalarLike, ""]],
+) -> Float[Array, "2 3"]:
     """Create the A matrix for each camera point
     [[-f, 0, x],
     [0, -f, y]]
@@ -335,7 +467,11 @@ def create_A_matrix(cord: Float[Array, "3"], f: float) -> Float[Array, "2 3"]:
 
 
 @jax.jit
-def create_B_matrix(cord: Float[Array, "3"], f: float) -> Float[Array, "2 3"]:
+@jaxtyped(typechecker=typechecker)
+def create_B_matrix(
+    cord: Float[Array, "3"],
+    f: Union[float, Float[ScalarLike, ""]],
+) -> Float[Array, "2 3"]:
     """Create the B matrix for each camera point
     [[xy/f, -(f+x^2/f), y],
     [f+y^2/f, -(xy)/f, -x]]
@@ -355,6 +491,43 @@ def create_B_matrix(cord: Float[Array, "3"], f: float) -> Float[Array, "2 3"]:
             [f + (cord[1] ** 2) / f, -(cord[0] * cord[1]) / f, -cord[0]],
         ]
     )
+
+
+@jaxtyped(typechecker=typechecker)
+def visualize_T_res(
+    T_search: Float[Array, "3 num_cand_points"],
+    tot_res: Float[Array, "num_cand_points"],
+    T_min: Float[Array, "3"],
+    T: Float[Array, "3"] = jnp.zeros(0),
+):
+    """Helper function to plot residuals over translation directions
+    Parameters
+    ------------
+    T_search : ndarray (3, num_cand_points)
+        Candidate Translation Directions
+    tot_res : ndarray (num_cand_points)
+        Total Residuals for each flow vector
+    T_min : ndarray (3)
+        Minimum Translation out T_search
+    T : ndarray (3)
+        Ground Truth Translation
+    """
+    plt.hexbin(
+        T_search[0],
+        T_search[1],
+        C=np.clip(tot_res, 0, np.quantile(tot_res, 0.85)),
+        gridsize=13,
+    )
+
+    plt.scatter(T_min[0], T_min[1], c="red")
+    if T.size > 0:
+        gt_dir = T / jnp.linalg.norm(T)
+        plt.scatter(gt_dir[0], gt_dir[1], c="green")
+
+    plt.xlabel("X Direction")
+    plt.ylabel("Y Direction")
+    plt.title("Residual over Translation Direction")
+    plt.colorbar()
 
 
 def main():
