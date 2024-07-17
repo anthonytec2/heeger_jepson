@@ -126,7 +126,7 @@ def coarse_to_fine(
     Parameters
     ------------
     V : ndarray (num_samples,2),
-        Flow Field
+        Flow Field, normalized coordinates unit, not pixels
     cam_pts : ndarray (3, num_samples)
         Camera Points
     K : jaxarray (3 ,3)
@@ -338,7 +338,7 @@ def get_inv_depth(
     Parameters
     ------------
     V : ndarray (num_samples,2),
-        Flow Field
+        Flow Field, normalized coordinates unit, not pixels
     cam_pts : ndarray (3, num_samples)
         Camera Points
     K : jaxarray (3 ,3)
@@ -525,7 +525,7 @@ def main():
     T = jnp.array([0, 0, 2])
     Ω = jnp.array([0, 0, 0])
     res = (100, 100)
-    f = 1
+    f = 1.0
     min_depth = 5
     max_depth = 10
     Z = jax.random.uniform(
