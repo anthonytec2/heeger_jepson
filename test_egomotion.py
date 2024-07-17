@@ -3,19 +3,24 @@ from src.heeger_jepson.motionfield import *
 
 
 def heeger_jepson_runner(flow, res, f, num_search=1000, num_pts=100 * 100):
-    # Create whatever other method you would like to generate points
-    # Tradationally, we do a coarse to fine search!
     T_search = generate_random_points_on_positive_hemisphere(num_search)
-    # Feel free to define your own policy, but this is a good starting point
 
     # Function to sample the flow field and return cam_pts
     # Computationally expensive to use entire flow field, so we sample
     flow_eval_pts, flow_eval = sample_points(jnp.ones(res), flow, num_pts)
-    # Feel free to define your own policy(Grid Sampling, Random,etc), but this is a good starting point
+
+    K = jnp.array(
+        [
+            [f, 0, res[0] / 2],
+            [0, f, res[1] / 2],
+            [0, 0, 1],
+        ]
+    )
 
     T_min, Omega_min, tot_res = heeger_jepson_RT(
         flow_eval,
         flow_eval_pts,
+        K,
         f,
         res,
         T_search,
@@ -24,6 +29,7 @@ def heeger_jepson_runner(flow, res, f, num_search=1000, num_pts=100 * 100):
     inv_depth = get_inv_depth(
         flow_eval,
         flow_eval_pts,
+        K,
         f,
         res,
         Omega_min,

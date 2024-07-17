@@ -99,6 +99,7 @@ def sample_points(
 def coarse_to_fine(
     V: Float[Array, "num_samples 2"],
     cam_pts: Integer[Array, "3 num_samples"],
+    K: Float[Array, "3 3"],
     f: Union[float, Float[ScalarLike, ""]],
     res: Tuple[
         Union[int, Integer[ScalarLike, ""]], Union[int, Integer[ScalarLike, ""]]
@@ -128,6 +129,8 @@ def coarse_to_fine(
         Flow Field
     cam_pts : ndarray (3, num_samples)
         Camera Points
+    K : jaxarray (3 ,3)
+        Intrinsics Matrix
     f : float
         Focal Length
     res : tuple
@@ -157,18 +160,12 @@ def coarse_to_fine(
     T_min_coarse, Omega_min_coarse, tot_res_coarse = heeger_jepson_RT(
         V,
         cam_pts,
+        K,
         f,
         res,
         T_search_coarse,
     )
 
-    K = jnp.array(
-        [
-            [f, 0, res[0] / 2],
-            [0, f, res[1] / 2],
-            [0, 0, 1],
-        ]
-    )
     min_pix = K @ T_min_coarse
     min_pix = min_pix / min_pix[2]
     x_pt = jnp.linspace(
@@ -194,6 +191,7 @@ def coarse_to_fine(
     T_min_fine, Omega_min_fine, tot_res_fine = heeger_jepson_RT(
         V,
         cam_pts,
+        K,
         f,
         res,
         T_search_fine,
@@ -212,6 +210,7 @@ def coarse_to_fine(
 def heeger_jepson_RT(
     V: Float[Array, "num_samples 2"],
     cam_pts: Integer[Array, "3 num_samples"],
+    K: Float[Array, "3 3"],
     f: Union[float, Float[ScalarLike, ""]],
     res: Tuple[
         Union[int, Integer[ScalarLike, ""]], Union[int, Integer[ScalarLike, ""]]
@@ -222,34 +221,30 @@ def heeger_jepson_RT(
     https://www.cs.toronto.edu/~jepson/papers/HeegerJepsonJCV1992.pdf
     Parameters
     ------------
-    V : ndarray (num_samples,2),
+    V : jaxarray (num_samples,2),
         Flow Field, normalized coordinates unit, not pixels
-    cam_pts : ndarray (3, num_samples)
+    cam_pts : jaxarray (3, num_samples)
         Camera Points
+    K : jaxarray (3 ,3)
+        Intrinsics Matrix
     f : float
         Focal Length
-    T_search : ndarray (3, num_cand_points)
+    T_search : jaxarray (3, num_cand_points)
         Candidate Translation Directions
     res : tuple
         Resolution of the image
     Returns
     --------
-    T_min : ndarray (3)
+    T_min : jaxarray (3)
         Minimum Translation out T_search
-    Omega_min : ndarray (3)
+    Omega_min : jaxarray (3)
         Minimum Rotation based on T_search
-    tot_res : ndarray (num_cand_points)
+    tot_res : jaxarray (num_cand_points)
         Total Residuals for each flow vector
     """
 
     # Normalize Camera Points + Flow
-    K = jnp.array(
-        [
-            [f, 0, res[0] / 2],
-            [0, f, res[1] / 2],
-            [0, 0, 1],
-        ]
-    )
+
     K_inv = jnp.linalg.inv(K)
 
     norm_cords = K_inv @ cam_pts  # Normalized Camera Points (3,num_samples)
@@ -331,6 +326,7 @@ def heeger_jepson_RT(
 def get_inv_depth(
     V: Float[Array, "num_samples 2"],
     cam_pts: Integer[Array, "3 num_samples"],
+    K: Float[Array, "3 3"],
     f: Union[float, Float[ScalarLike, ""]],
     res: Tuple[
         Union[int, Integer[ScalarLike, ""]], Union[int, Integer[ScalarLike, ""]]
@@ -345,6 +341,8 @@ def get_inv_depth(
         Flow Field
     cam_pts : ndarray (3, num_samples)
         Camera Points
+    K : jaxarray (3 ,3)
+        Intrinsics Matrix
     f : float
         Focal Length
     Omega_min : ndarray (3)
@@ -360,13 +358,6 @@ def get_inv_depth(
     """
 
     # In this function, recompute many of the values as we may pass in new points not in original function
-    K = jnp.array(
-        [
-            [f, 0, res[0] / 2],
-            [0, f, res[1] / 2],
-            [0, 0, 1],
-        ]
-    )
     K_inv = jnp.linalg.inv(K)
 
     norm_cords = K_inv @ cam_pts  # Normalized Camera Points (3,C)
@@ -541,6 +532,13 @@ def main():
         jax.random.PRNGKey(0), (res[0] * res[1], 1), minval=min_depth, maxval=max_depth
     )
     flow = MotionField(f, res, T, Ω, Z).generate_flow()
+    K = jnp.array(
+        [
+            [f, 0, res[0] / 2],
+            [0, f, res[1] / 2],
+            [0, 0, 1],
+        ]
+    )
 
     # Create whatever other method you would like to generate points
     # Tradationally, we do a coarse to fine search!
@@ -555,6 +553,7 @@ def main():
     T_min, Omega_min, tot_res = heeger_jepson_RT(
         flow_eval,
         flow_eval_pts,
+        K,
         f,
         res,
         T_search,
@@ -563,6 +562,7 @@ def main():
     inv_depth = get_inv_depth(
         flow_eval,
         flow_eval_pts,
+        K,
         f,
         res,
         Omega_min,
