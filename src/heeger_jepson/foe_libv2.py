@@ -95,6 +95,7 @@ def sample_points(
     return pts, flow[y_sel, x_sel]
 
 
+@partial(jax.jit, static_argnums=(6, 7, 8))
 @jaxtyped(typechecker=typechecker)
 def coarse_to_fine(
     V: Float[Array, "num_samples 2"],
