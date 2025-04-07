@@ -96,7 +96,7 @@ e_i &= \min_{T,\Omega,\frac{1}{Z_i}} \left\| \frac{1}{Z_i} A(x, y) T + B \Omega 
 \end{align*}
 ```
 
-Hence, we have transformed a problem of three variables into only a search over T. The nice part of the search over T is $T\in SO(2)$ allowing something as simple as brute force search algorithms for this minimization. After solving for T, $\Omega=\hat{\Omega}(T)$, and $\frac{1}{Z_i}$ can be solved for directly. Therefore through the Heeger and Jepson algorithm, one can recover the egomotion from the optical flow. In this repository, we will show some examples of how the above is implemented in code. 
+Hence, we have transformed a problem of three variables into only a search over T. The nice part of the search over T is $T\in S^2 $ allowing something as simple as brute force search algorithms for this minimization. After solving for T, $\Omega=\hat{\Omega}(T)$, and $\frac{1}{Z_i}$ can be solved for directly. Therefore through the Heeger and Jepson algorithm, one can recover the egomotion from the optical flow. In this repository, we will show some examples of how the above is implemented in code. 
 
 
 ### Implementation
